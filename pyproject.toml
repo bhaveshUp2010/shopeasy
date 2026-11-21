@@ -1,0 +1,28 @@
+[project]
+name = "shopeasy"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Bhavesh", email = "bhaav.minor@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "faiss-cpu>=1.16.0",
+    "ipykernel>=7.4.0",
+    "langchain>=1.5.2",
+    "langchain-community>=0.4.2",
+    "langchain-google-genai>=4.5.2",
+    "langchain-groq>=1.2.1",
+    "langchain-sqlserver>=1.0.1",
+    "langgraph>=1.2.24",
+    "python-dotenv>=1.2.4",
+    "streamlit>=1.67.0",
+]
+
+[project.scripts]
+shopeasy = "shopeasy:main"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
