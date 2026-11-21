@@ -3,11 +3,18 @@ from langgraph.graph import START, StateGraph, END
 from langgraph.graph.message import add_messages
 from typing import Annotated, TypedDict
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
+from shopeasy.app.tools import * 
+from langgraph.prebuilt import ToolNode, tools_condition
+
+
+tools = [get_order_status, get_all_orders, create_ticket, create_refund]
 
 llm = get_model()
-
+llm_with_tools = llm.bind_tools(tools=tools)
 
 class State(TypedDict):
+    
     messages : Annotated[list[BaseMessage], add_messages]
 
 def chat_node(state: State):
@@ -15,50 +22,73 @@ def chat_node(state: State):
     messages = [
         SystemMessage("""You are an AI customer support assistant for an e-commerce company.
 
-Your responsibilities are to help customers with:
+Your responsibilities:
 - Order details and delivery status.
-- Refund queries and refund requests.
 - Creating and tracking support tickets.
 - General customer complaints and queries.
 
-**Guidelines:**
+Guidelines:
 1. Be friendly, professional, empathetic, and concise.
-2. Always verify customer ownership before sharing order information.
-3. Never invent customer details, order statuses, or refund information.
-4. Check refund eligibility before initiating a refund.
-5. Never claim an action succeeded unless the corresponding tool or database operation confirms it.
+2. Never ask customers for their customer_id.
+3. Verify order ownership before sharing order information.
+4. Never invent order statuses or customer details.
+5. Never claim an action succeeded without tool confirmation.
 6. Ask for missing information when necessary.
-7. Never expose customer data to unauthorized users.
-8. If an issue cannot be resolved, offer to create a support ticket.
+7. Never expose unauthorized customer data.
+8. Offer to create a support ticket when an issue cannot be resolved.
+9. When an order lookup tool returns that an order does not
+   exist or does not belong to the authenticated customer:
+   - Do not ask for the customer's name, email, phone number,
+     or other identity information.
+   - Do not attempt to access the order using another identity.
+   - Politely inform the customer that the order could not
+     be found in their account.
+   - Never suggest ways to bypass order ownership checks.
 
-Prioritize customer privacy, accuracy, and helpfulness in every interaction."""),
+Prioritize privacy, accuracy, and helpfulness.
+"""),
         *state["messages"]
     ]   
-    res = llm.invoke(messages)
+    res = llm_with_tools.invoke(messages)
 
     return {"messages": [res]}
 
+
+
+checkpoint = InMemorySaver()
 graph = StateGraph(State)
+graph.add_node("chat", chat_node)
+graph.add_node("tools", ToolNode(tools))
 
-graph.add_node("chat_node", chat_node)
-graph.add_edge(START, "chat_node")
-graph.add_edge("chat_node", END)
+graph.add_edge(START, "chat")
+graph.add_conditional_edges(
+    "chat",
+    tools_condition
+)
+graph.add_edge("tools", "chat")
+chatbot = graph.compile(checkpointer= checkpoint)
 
-chatbot = graph.compile()
+config = {
+    "configurable": {"customer_id": 1, "thread_id": "thread_01"}
+}
+# res = chatbot.invoke(
+#             {"messages":[HumanMessage("list all of my orders i want to see them all")]},
+#             config= config
+#         )
+# print(res["messages"][-1].content)
 
-while True:
-    user_input = input("user: ")
+if __name__ == "__main__":
+    while True:
+        user_input = input("user: ")
 
-    # print(f"user: {user_input}")
+        # print(f"user: {user_input}")
 
-    if user_input.strip().lower() in ["quit", "bye", "exit"]:
-        break
+        if user_input.strip().lower() in ["quit", "bye", "exit"]:
+            break
 
-    print("ai: ", end = " ", flush= True)
-    for message_chunk, metadata in chatbot.stream(
-        {"messages": [HumanMessage(content=user_input)]},
-        stream_mode="messages",
-    ):
-        if message_chunk.content:
-            print( message_chunk.content, end= " ", flush= True)       
-    print() 
+        ai_msg = chatbot.invoke(
+            {"messages":[HumanMessage(content=user_input)]},
+            config= config
+            )
+
+        print("ai: ", ai_msg["messages"][-1].content)

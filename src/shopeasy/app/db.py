@@ -11,6 +11,7 @@ def get_connection():
     return conn
 
 def get_order(order_id: int, cust_id: int) -> sqlite3.Row | None:
+    """get order info"""
     conn = get_connection()
 
     try:
@@ -27,6 +28,8 @@ def get_order(order_id: int, cust_id: int) -> sqlite3.Row | None:
     
 
 def get_customer_orders(cust_id: int) -> list[sqlite3.Row] :
+
+    """Return all orders for a customer"""
     conn = get_connection()
 
     try:
@@ -43,28 +46,30 @@ def get_customer_orders(cust_id: int) -> list[sqlite3.Row] :
         conn.close()
 
 
-def create_ticket(
+def create_ticket_db(
     customer_id: int,
     subject: str,
     description: str,
     priority: str,
     order_id: int | None = None
 ):
-
     conn = get_connection()
 
     try:
-        cursor = conn.execute("""
-        INSERT INTO tickets (
-        customer_id,
-        order_id,
-        subject,
-        description,
-        priority
+        cursor = conn.execute(
+            """
+            INSERT INTO tickets (
+                customer_id,
+                order_id,
+                subject,
+                description,
+                priority
+            )
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            (customer_id, order_id, subject, description, priority)
         )
-        VALUES (?, ?, ?, ?, ?);""",
-        (customer_id, order_id, subject, description, priority)
-        )
+
         conn.commit()
         return cursor.lastrowid
 
@@ -75,11 +80,11 @@ def create_ticket(
     finally:
         conn.close()
 
-def create_refund(
+        
+def create_refund_db(
     order_id: int,
     amount_cents: int,
     reason: str
-
 ):
     conn = get_connection()
     try:
@@ -87,10 +92,11 @@ def create_refund(
             """INSERT INTO refunds (
             order_id,
             amount_cents,
-            reason
+            reason,
+            status
         )
-        VALUES (?, ?, ?);""",
-        (order_id, amount_cents, reason)
+        VALUES (?, ?, ?, ?);""",
+        (order_id, amount_cents, reason, "requested")
         )
         conn.commit()
         return cursor.lastrowid

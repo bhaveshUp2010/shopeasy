@@ -1,6 +1,7 @@
 
 import sqlite3
 from pathlib import Path
+from datetime import date, timedelta
 
 
 # --------------------------------------------------
@@ -350,6 +351,7 @@ memories = [
 # SEED DATABASE
 # --------------------------------------------------
 
+
 def seed_database():
 
     conn = get_connection()
@@ -363,12 +365,53 @@ def seed_database():
                 VALUES (?, ?, ?, ?)
             """, customers)
 
+            # Fixed reference date for reproducible seed data
+            reference_date = date(2026, 11, 21)
+
+            orders_with_created_at = []
+
+            for order in orders:
+
+                order_id, customer_id, amount, currency, status, delivered_at = order
+
+                if delivered_at:
+                    # Order must be created before delivery
+                    delivery_date = date.fromisoformat(delivered_at)
+                    days_before = 2 + (order_id % 6)
+                    created_at = delivery_date - timedelta(days=days_before)
+
+                else:
+                    # Assign realistic ages based on order status
+                    if status == "shipped":
+                        days_old = 1 + (order_id % 4)
+
+                    elif status == "placed":
+                        days_old = order_id % 2
+
+                    elif status == "returned":
+                        days_old = 14 + (order_id % 20)
+
+                    elif status == "cancelled":
+                        days_old = 2 + (order_id % 14)
+
+                    created_at = reference_date - timedelta(days=days_old)
+
+                orders_with_created_at.append((
+                    order_id,
+                    customer_id,
+                    amount,
+                    currency,
+                    status,
+                    created_at.isoformat(),
+                    delivered_at
+                ))
+
             conn.executemany("""
                 INSERT INTO orders
                 (order_id, customer_id, total_amount_cents,
-                 currency, status, delivered_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, orders)
+                 currency, status, created_at, delivered_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, orders_with_created_at)
 
             conn.executemany("""
                 INSERT INTO refunds
@@ -405,7 +448,6 @@ def seed_database():
 
     finally:
         conn.close()
-
 
 # --------------------------------------------------
 # VERIFY DATABASE
@@ -448,6 +490,14 @@ def verify_database():
         ).fetchall()
 
         print("Foreign key errors:", foreign_key_errors)
+        invalid_orders = conn.execute("""
+            SELECT order_id, created_at, delivered_at
+            FROM orders
+            WHERE delivered_at IS NOT NULL
+            AND created_at >= delivered_at
+        """).fetchall()
+
+        print("Orders with invalid timestamps:", invalid_orders)
 
     finally:
         conn.close()
