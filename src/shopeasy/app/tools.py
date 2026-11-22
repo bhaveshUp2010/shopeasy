@@ -3,7 +3,7 @@ from langchain_core.runnables import RunnableConfig
 from typing import Literal
 from shopeasy.app.db import *
 from shopeasy.rag.vectorstore import get_retriever
-
+from langgraph.types import interrupt
 @tool
 def get_order_status(config: RunnableConfig, order_id: int):
     """Return order status for a specific order """
@@ -49,47 +49,51 @@ def create_ticket(
 
     return result
 
+def _rupees(cents: int) -> str:
+    return f"Rs{cents / 100:,.2f}"
 
 @tool
-def create_refund(
-    config: RunnableConfig,
-    reason: str,
-    order_id: int 
-):
+def create_refund(config: RunnableConfig, order_id: int, reason: str) -> str:
+    """Request a refund for one of the customer's delivered orders.
 
-    """Create a refund request after verifying order ownership
-    and refund eligibility. Calculate the amount using database data."""
+    Use only when the customer clearly asks for a refund and has given an order
+    and a reason. Eligibility is checked automatically. Refunds of ₹2,000 or less
+    are processed instantly; larger ones are sent to a manager for review.
+    The refund is always for the full order total. Report only what this tool returns.
+    """
     cust_id = config["configurable"]["customer_id"]
-    order = get_order(order_id= order_id, cust_id= cust_id)
-    if not order:
-        return "Cannot create Refund: Invalid order id"
+    thread_id = config["configurable"]["thread_id"]
 
-    amount_cents = order["total_amount_cents"]
-
-    refund = create_refund_db(
-        cust_id,
-        order_id,
-        amount_cents,
-        reason
+    result = create_refund_db(
+        cust_id=cust_id, order_id=order_id, reason=reason, thread_id=thread_id
     )
+    if not result["success"]:
+        return result["message"]
 
-    return refund
+    amount = _rupees(result["amount_cents"])
+    rid = result["refund_id"]
+
+    if not result["needs_approval"]:
+        return f"Refund #{rid} of {amount} for order {order_id} has been approved and processed."
+    return (f"Refund request #{rid} for {amount} on order {order_id} has been submitted. "
+            f"Because it is over ₹2,000, a manager needs to review it. "
+            f"The customer can ask for its status at any time.")
 
 
 @tool
-def rag_tool(qurey: str) : 
+def rag_tool(query: str) : 
     """
     Retrieve relevant information from the PDF document.
 
     Use this tool when the user asks factual or conceptual questions
-    that may be answered using the stored PDF documents.
+    that may be answered using the stored docs in vector db.
 
     Args:
         query: The question or search query used to retrieve PDF content.
     """
 
     retriever = get_retriever()
-    docs = retriever.invoke(qurey)
+    docs = retriever.invoke(query)
 
     if not docs:
         return "no relevant docs found in the vector store "

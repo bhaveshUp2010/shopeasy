@@ -529,9 +529,30 @@ ADD COLUMN rejection_reason TEXT;
 ALTER TABLE refunds
 ADD COLUMN approval_thread_id TEXT;""")
 
+
+def create_thread_table():
+    conn = get_connection()
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS threads (
+            thread_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id INTEGER NOT NULL,
+            title TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_active_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (customer_id)
+                REFERENCES customers(customer_id)
+        );
+    """)
+
+    conn.commit()
+    conn.close()    
+
 if __name__ == "__main__":
 
     # create_db()
     # seed_database()
     # verify_database()
-    alter_table()
+    # alter_table()
+    create_thread_table()

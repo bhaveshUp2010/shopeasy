@@ -1,8 +1,15 @@
 import sqlite3
 from pathlib import Path 
-from datetime import timezone, datetime
+from datetime import timezone, datetime, date
 
 DB_PATH = Path(__file__).resolve().parent.parent / "support.db"
+
+ACTIVE_REFUND_MESSAGES = {
+    "processed": ("already_processed", "A refund has already been processed for this order."),
+    "approved":  ("already_approved",  "A refund for this order has already been approved."),
+    "requested": ("already_requested", "A refund request is already pending for this order."),
+}
+
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -61,6 +68,19 @@ def get_customer_orders(cust_id: int) -> list[sqlite3.Row] :
     finally:
         conn.close()
 
+
+def check_refund_eligibility(order) -> tuple[bool, str]:
+
+    if order["status"] != "delivered":
+        return False, f"only delivered oderers can be refunded"
+
+    delivered = date.fromisoformat(order["delivered_at"])
+
+    days_since = (date.today() - delivered).days
+    if days_since > 30:
+        return False, f"The {30}-day refund window has passed ({days_since} days since delivery)."
+
+    return True, "eligeble"
 
 def create_ticket_db(
     customer_id: int,
@@ -210,87 +230,108 @@ def create_ticket_db(
         conn.close()
         
 def create_refund_db(
-    customer_id: int,
+    cust_id: int,
     order_id: int,
-    amount_cents: int,
-    reason: str
+    reason: str,
+    thread_id: str
 ):
-    conn = get_connection() 
+    conn = get_connection()
 
     try:
         conn.execute("BEGIN IMMEDIATE")
-        order = get_order(cust_id=customer_id, order_id= order_id)
+        order = conn.execute(
+            """SELECT order_id, status, delivered_at, total_amount_cents
+               FROM orders WHERE order_id = ? AND customer_id = ?;""",
+            (order_id, cust_id),
+        ).fetchone()
 
         if not order:
             conn.rollback()
-            return {
-                "status" : False,
-                "action" : "not found",
-                "messge": "order not foung in this customer account"
-            }
+            return {"success": False, "action": "not_found",
+                    "message": "Order not found in this customer's account."}
 
-        refunds = get_refunds(order_id= order_id)
+        refunds = conn.execute(
+            "SELECT * FROM refunds WHERE order_id = ? ORDER BY refund_id DESC;",
+            (order_id,),
+        ).fetchall()
 
-        processed = next(
-            (r for r in refunds if r["status"] == "processed"),
-            None
-        )
-        if processed:
-            conn.rollback()
-            return {
-                "success": False,
-                "action": "already_processed",
-                "refund": dict(processed),
-                "message": "A refund has already been processed for this order."
-            }
+        for r in refunds:
+            if r["status"] == "requested" and  r["approval_thread_id"] == thread_id:
+                conn.rollback()
+                return {"success": True,
+                        "action": "pending_resume",
+                        "refund_id": r["refund_id"],
+                        "order_id": r["order_id"],
+                        "amount_cents": r["amount_cents"],
+                        "needs_approval": True}
 
-        approved = next(
-            (r for r in refunds if r["status"] == "approved"),
-            None
-        )   
-        if approved:
+        for r in refunds:
+            if r["status"] in ACTIVE_REFUND_MESSAGES:
+                action, msg = ACTIVE_REFUND_MESSAGES[r["status"]]
+                conn.rollback()
+                return {"success": False, "action": action, "message": msg}
+
+        eligible, why = check_refund_eligibility(order)
+        if not eligible:
             conn.rollback()
-            return {
-                "success": False,
-                "action": "already_approved",
-                "refund": dict(approved),
-                "message": "A refund for this order has already been approved."
-            }
-        requested = next(
-            (r for r in refunds if r["status"] == "requested"),
-            None
-        )
-        if requested:
-            conn.rollback()
-            return {
-                "success": False,
-                "action": "already_requested",
-                "refund": dict(requested),
-                "message": "A refund request is already pending for this order."
-            }
-        cursor = conn.execute("""
-        INSERT INTO refunds (
-                order_id,
-                amount_cents,
-                reason,
-                status
+            return {"success": False, "action": "not_eligible", "message": why}
+        amount = order["total_amount_cents"]
+
+        needs_approval = amount > 200000
+        if needs_approval:
+            cursor = conn.execute(
+                """INSERT INTO refunds
+                   (order_id, amount_cents, reason, status, approval_thread_id)
+                   VALUES (?, ?, ?, 'requested', ?);""",
+                   (order_id, amount, reason, thread_id)
             )
-            VALUES (?, ?, ?, 'requested');""",
-            (order_id, amount_cents, reason))
+        else:
+            cursor = conn.execute(
+                """INSERT INTO refunds
+                   (order_id, amount_cents, reason, status, approval_thread_id,
+                    approved_by, decided_at, processed_at)
+                   VALUES (?, ?, ?, 'processed', ?, 'auto',
+                           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);""",
+                (order_id, amount, reason, thread_id),
+            )
 
         refund_id = cursor.lastrowid
         conn.commit()
 
-        return {
-            "success": True,
-            "action": "created",
-            "refund_id": refund_id,
-            "message": f"Refund request #{refund_id} created successfully."
-        }
+        return {"success": True, "action": "created", "refund_id": refund_id,
+                "order_id": order_id,"amount_cents": amount, "needs_approval": needs_approval}
 
-    except Exception as e:
+    except Exception:
         conn.rollback()
-        raise 
+        raise
 
+    finally:
+        conn.close()
+
+
+def resolve_refund_db(
+    refund_id: int,
+    approved: int, 
+    approved_by: str,
+    note: str = ""
+) -> dict :
+    conn = get_connection()
+
+    try:
+        with conn:
+            cursor = conn.execute(
+                """UPDATE refunds
+                   SET status = ?, approved_by = ?, decision_note = ?,
+                       decided_at = CURRENT_TIMESTAMP,
+                       processed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP END
+                   WHERE refund_id = ? AND status = 'requested';""",
+                ("processed" if approved else "rejected",
+                 approved_by, note, approved, refund_id),   
+            )
+
+        if cursor.rowcount == 0 :
+            return {"success": False, "message": "This refund was already decided or no longer exists."}
+
+        return {"success" : True}
     finally:
         conn.close()
