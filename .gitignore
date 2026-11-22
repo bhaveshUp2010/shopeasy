@@ -11,3 +11,14 @@ wheels/
 
 .env
 .env.sample
+
+# Database
+src/shopeasy/support.db
+
+# FAISS vector index
+src/faiss_index/
+
+# Data
+data/
+
+checkpoints.sqlite

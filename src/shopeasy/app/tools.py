@@ -2,11 +2,11 @@ from langchain.tools import tool
 from langchain_core.runnables import RunnableConfig
 from typing import Literal
 from shopeasy.app.db import *
+from shopeasy.rag.vectorstore import get_retriever
 
 @tool
 def get_order_status(config: RunnableConfig, order_id: int):
-    """Return order status for a specific order 
-    input args:config: Runnable config, order id: int"""
+    """Return order status for a specific order """
 
     cust_id = config["configurable"]["customer_id"]
 
@@ -27,7 +27,6 @@ def get_all_orders(config: RunnableConfig):
         return "no existing orders for the customer"
     return [dict(order) for order in orders]
 
-
 @tool
 def create_ticket(
     config: RunnableConfig,
@@ -36,29 +35,20 @@ def create_ticket(
     priority: Literal["low", "medium", "high"],
     order_id: int | None = None
 ):
-    """Create a customer support ticket."""
+    """Create a support ticket or add a complaint to an existing ticket."""
 
-    cust_id = config["configurable"]["customer_id"]
+    customer_id = config["configurable"]["customer_id"]
 
-    # Verify order ownership if an order ID is provided
-    if order_id is not None:
-        order = get_order(order_id=order_id, cust_id=cust_id)
-
-        if not order:
-            return "Cannot create ticket: invalid order ID."
-
-    ticket_id = create_ticket_db(
-        cust_id,
-        subject,
-        description,
-        priority,
-        order_id
+    result = create_ticket_db(
+        customer_id=customer_id,
+        subject=subject,
+        description=description,
+        priority=priority,
+        order_id=order_id
     )
 
-    return {
-        "message": "Support ticket created successfully.",
-        "ticket_id": ticket_id
-    }
+    return result
+
 
 @tool
 def create_refund(
@@ -76,13 +66,42 @@ def create_refund(
 
     amount_cents = order["total_amount_cents"]
 
-    refund_id = create_refund_db(
+    refund = create_refund_db(
+        cust_id,
         order_id,
         amount_cents,
         reason
     )
 
-    return {
-        "message": "refund create successfully",
-        "refund_id": refund_id
-    }
+    return refund
+
+
+@tool
+def rag_tool(qurey: str) : 
+    """
+    Retrieve relevant information from the PDF document.
+
+    Use this tool when the user asks factual or conceptual questions
+    that may be answered using the stored PDF documents.
+
+    Args:
+        query: The question or search query used to retrieve PDF content.
+    """
+
+    retriever = get_retriever()
+    docs = retriever.invoke(qurey)
+
+    if not docs:
+        return "no relevant docs found in the vector store "
+    formatted_docs = []
+
+    for index, doc in enumerate(docs, start= 1):
+
+        souce = doc.metadata.get("source", "unknown")
+        formatted_docs.append(
+            f"Document {index}\n"
+            f"Source {souce}\n"
+            f"content {doc.page_content}"
+        )
+
+    return "\n\n".join(formatted_docs)

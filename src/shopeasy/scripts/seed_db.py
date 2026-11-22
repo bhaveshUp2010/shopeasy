@@ -507,8 +507,31 @@ def verify_database():
 # MAIN
 # --------------------------------------------------
 
+
+def alter_table():
+    conn = get_connection()
+
+    conn.executescript("""ALTER TABLE refunds
+ADD COLUMN approved_by TEXT;
+
+ALTER TABLE refunds
+ADD COLUMN approved_at TEXT;
+
+ALTER TABLE refunds
+ADD COLUMN rejected_by TEXT;
+
+ALTER TABLE refunds
+ADD COLUMN rejected_at TEXT;
+
+ALTER TABLE refunds
+ADD COLUMN rejection_reason TEXT;
+
+ALTER TABLE refunds
+ADD COLUMN approval_thread_id TEXT;""")
+
 if __name__ == "__main__":
 
-    create_db()
-    seed_database()
-    verify_database()
+    # create_db()
+    # seed_database()
+    # verify_database()
+    alter_table()
